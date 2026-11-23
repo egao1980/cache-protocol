@@ -12,12 +12,13 @@
   :in-order-to ((test-op (test-op "cache-protocol/tests"))))
 
 (defsystem "cache-protocol/tests"
-  :depends-on ("cache-protocol" "rove")
+  :depends-on ("cache-protocol" "rove" "bordeaux-threads")
   :pathname "tests"
   :serial t
   :components ((:file "package")
                (:file "protocol-test")
-               (:file "restarts-test"))
+               (:file "restarts-test")
+               (:file "ttl-atomicity-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)
                (error "tests failed for ~A" (component-name c)))))
