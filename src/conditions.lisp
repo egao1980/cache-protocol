@@ -8,6 +8,16 @@
                      (cache-error-key c)
                      (cache-error-message c)))))
 
+(define-condition cache-connection-error (cache-error)
+  ((cause :initarg :cause :reader cache-connection-error-cause :initform nil))
+  (:report (lambda (c s)
+             (format s "cache connection error~@[: ~a~]~@[ (~a)~]"
+                     (cache-error-message c)
+                     (cache-connection-error-cause c))))
+  (:documentation
+   "A backend could not reach its server, or lost the connection. CAUSE is
+the transport condition (usocket, stream or TLS error), when there is one."))
+
 (define-condition cache-cas-mismatch (cache-error)
   ((expected :initarg :expected :reader cache-cas-mismatch-expected :initform nil)
    (actual :initarg :actual :reader cache-cas-mismatch-actual :initform nil))

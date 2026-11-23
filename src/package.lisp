@@ -20,6 +20,9 @@
            #:in-memory-ttl-cache
            #:make-in-memory-ttl-cache
            #:use-in-memory-ttl-cache
-           #:cache-clock))
+           #:cache-clock
+           #:cache-connection-error
+           #:cache-connection-error-cause
+           #:monotonic-seconds))
 
 (in-package #:cache-protocol)
