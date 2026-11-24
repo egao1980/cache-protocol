@@ -23,6 +23,7 @@
            #:cache-clock
            #:cache-connection-error
            #:cache-connection-error-cause
-           #:monotonic-seconds))
+           #:monotonic-seconds
+           #:+monotonic-tick+))
 
 (in-package #:cache-protocol)
