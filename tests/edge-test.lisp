@@ -67,6 +67,42 @@
         (format nil "incr on ~S signals cache-error" value))
     (ok (equal value (cache-protocol:cache-get c "k")) "the value is unchanged")))
 
+(deftest-parametrize incr-rejects-what-redis-incr-refuses
+    ((value delta)
+     ("007" 1) ("-0" 1) ("00" 1) ("-007" 1)
+     ("9223372036854775808" 0) ("-9223372036854775809" 0)
+     (9223372036854775808 0)
+     ("9223372036854775807" 1) ("-9223372036854775808" -1)
+     ("1" 9223372036854775808))
+  (let ((c (cache-protocol:make-in-memory-ttl-cache)))
+    (cache-protocol:cache-put c "k" value)
+    (ok (signals (cache-protocol:cache-incr c "k" :delta delta)
+          'cache-protocol:cache-error)
+        (format nil "incr ~S by ~S signals cache-error" value delta))
+    (ok (equal value (cache-protocol:cache-get c "k")) "the value is unchanged")))
+
+(deftest-parametrize incr-accepts-the-int64-edges
+    ((value delta expected)
+     ("0" 1 1) ("-1" 1 0) ("10" -20 -10)
+     ("9223372036854775806" 1 9223372036854775807)
+     ("-9223372036854775807" -1 -9223372036854775808))
+  (let ((c (cache-protocol:make-in-memory-ttl-cache)))
+    (cache-protocol:cache-put c "k" value)
+    (ok (eql expected (cache-protocol:cache-incr c "k" :delta delta))
+        (format nil "incr ~S by ~S = ~S" value delta expected))))
+
+(deftest float-clock-and-float-ttl-stay-exact
+  ;; A double-float Unix clock (time.time() shape) and a single-float TTL:
+  ;; the expiry is rational, so 0.1 s on a clock past 2^24 is still 0.1 s.
+  (let* ((now 1795470000.1d0)
+         (c (cache-protocol:make-in-memory-ttl-cache :clock (lambda () now))))
+    (cache-protocol:cache-put c "k" "v" :ttl 0.1)
+    (ok (equal "v" (cache-protocol:cache-get c "k")) "alive right after the put")
+    (incf now 0.09d0)
+    (ok (equal "v" (cache-protocol:cache-get c "k")) "alive at +0.09 s")
+    (incf now 0.02d0)
+    (ok (null (cache-protocol:cache-get c "k")) "gone at +0.11 s")))
+
 (deftest cas-nil-expected-matches-missing-key
   (let ((c (cache-protocol:make-in-memory-ttl-cache)))
     (ok (equal "first" (cache-protocol:cache-cas c "k" nil "first")))

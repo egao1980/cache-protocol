@@ -28,14 +28,24 @@ INTERNAL-TIME-UNITS-PER-SECOND and does not follow wall-clock steps."))
   (setf *cache-backend* (make-in-memory-ttl-cache :clock clock)))
 
 (defun %now (cache)
-  (funcall (cache-clock cache)))
+  "The clock reading as a rational. A float reading is taken exactly
+(CL:RATIONAL), so no float reaches the expiry arithmetic."
+  (let ((now (funcall (cache-clock cache))))
+    (if (floatp now) (rational now) now)))
 
 (defmacro with-cache-lock ((cache) &body body)
   `(bt2:with-recursive-lock-held ((in-memory-ttl-cache-lock ,cache))
      ,@body))
 
 (defun %expires-at (cache ttl)
-  (and ttl (+ (%now cache) ttl)))
+  "Absolute expiry TTL seconds from now, as a rational, or NIL. A float
+TTL is RATIONALIZEd (0.1 -> 1/10) first: added to the clock as a float, a
+single-float :ttl would make the expiry a single-float, 24 bits of
+mantissa, and past 2^24 s (194 days of uptime, or any Unix-time clock) the
+expiry would be rounded to whole seconds or minutes."
+  (and ttl
+       (+ (%now cache)
+          (if (floatp ttl) (rationalize ttl) ttl))))
 
 (defun %expired-p (cache entry)
   "An entry is gone once its TTL has fully elapsed: expiry <= now."
@@ -61,14 +71,17 @@ The caller holds the cache lock."
   value)
 
 (defun %integer-text-p (string)
-  "Redis INCR syntax: an optional minus sign, then one or more ASCII digits."
-  (let ((start (if (and (plusp (length string))
-                        (char= #\- (char string 0)))
-                   1
-                   0)))
-    (and (< start (length string))
-         (every (lambda (c) (char<= #\0 c #\9))
-                (subseq string start)))))
+  "Redis string2ll syntax: an optional minus sign, then a non-zero digit
+and more ASCII digits, or a lone \"0\". \"007\", \"-0\", \"+1\" and \" 1\"
+are refused, as INCR refuses them."
+  (let* ((len (length string))
+         (start (if (and (plusp len) (char= #\- (char string 0))) 1 0)))
+    (flet ((digitp (c) (char<= #\0 c #\9)))
+      (cond
+       ((= start len) nil)
+       ((string= string "0") t)
+       (t (and (char<= #\1 (char string start) #\9)
+               (every #'digitp (subseq string start))))))))
 
 (defmethod cache-get ((cache in-memory-ttl-cache) key &key)
   (with-cache-lock (cache)
@@ -88,24 +101,30 @@ The caller holds the cache lock."
 (defmethod cache-incr ((cache in-memory-ttl-cache) key &key (delta 1))
   (check-type delta integer)
   ;; Read, add and store under the lock; keep the entry's expiry (Redis
-  ;; INCR keeps the TTL). A non-integer value is reported after the lock
-  ;; is released, so handlers never run while holding it.
-  (multiple-value-bind (new bad-entry)
+  ;; INCR keeps the TTL). Values and results stay in (signed-byte 64), as
+  ;; on Redis. Errors are reported after the lock is released, so handlers
+  ;; never run while holding it.
+  (multiple-value-bind (new problem)
       (with-cache-lock (cache)
         (let* ((entry (%live-entry cache key))
-               (cur (car entry)))
+               (cur (car entry))
+               (base (cond
+                      ((null cur) 0)
+                      ((integerp cur) cur)
+                      ((and (stringp cur) (%integer-text-p cur))
+                       (parse-integer cur)))))
           (cond
-           ((null cur)
-            (%store cache key delta (cdr entry)))
-           ((integerp cur)
-            (%store cache key (+ cur delta) (cdr entry)))
-           ((and (stringp cur) (%integer-text-p cur))
-            (%store cache key (+ (parse-integer cur) delta) (cdr entry)))
-           (t (values nil entry)))))
-    (when bad-entry
-      (error 'cache-error :key key
-                          :message (format nil "not an integer: ~s"
-                                           (car bad-entry))))
+           ((or (null base)
+                (not (typep base '(signed-byte 64)))
+                (not (typep delta '(signed-byte 64))))
+            (values nil (format nil "value is not an integer or out of range: ~s"
+                                cur)))
+           ((not (typep (+ base delta) '(signed-byte 64)))
+            (values nil (format nil "increment or decrement would overflow: ~s + ~s"
+                                base delta)))
+           (t (%store cache key (+ base delta) (cdr entry))))))
+    (when problem
+      (error 'cache-error :key key :message problem))
     new))
 
 (defmethod cache-cas ((cache in-memory-ttl-cache) key expected new &key ttl)
