@@ -41,16 +41,21 @@ NTP (a macOS CI VM showed a 312 us wall-clock adjustment)."
         (early 0)
         (worst 0))
     (dotimes (i 200)
-      ;; T0 is read before the put, so the TTL cannot have elapsed while
-      ;; less than 5 ms have passed since T0 (0.1 ms margin).
+      ;; T0 is read before the put and ELAPSED after the get, so a get that
+      ;; finds nothing while ELAPSED < 4.9 ms ran less than 4.9 ms after
+      ;; the put: the entry was gone before its TTL had elapsed. A thread
+      ;; preempted in between only makes ELAPSED larger (no false alarm).
       (let ((t0 (%fine-us)))
         (cache-protocol:cache-put c "k" "v" :ttl 1/200)
-        (loop for elapsed = (- (%fine-us) t0)
-              while (< elapsed 4900)
-              unless (cache-protocol:cache-get c "k")
-                do (incf early)
-                   (setf worst (max worst (- 5000 elapsed)))
-                   (return))))
+        (loop
+          (let* ((present (cache-protocol:cache-get c "k"))
+                 (elapsed (- (%fine-us) t0)))
+            (when (>= elapsed 4900)
+              (return))
+            (unless present
+              (incf early)
+              (setf worst (max worst (- 5000 elapsed)))
+              (return))))))
     (ok (zerop early)
         (format nil ":ttl 1/200 (5 ms) was gone early in ~D of 200 puts, up to ~D us early"
                 early worst))))
