@@ -11,15 +11,17 @@
 ;;; CLOCK_MONOTONIC and passes; the ubuntu lane does not. Python's
 ;;; TTLCache and Redis (PX) keep a 5 ms TTL alive for 5 ms.
 
-#+(and sbcl unix)
+#+(and sbcl (or linux darwin))
 (defun %fine-us ()
-  "Reference time in microseconds (gettimeofday), finer than a kernel tick."
-  (multiple-value-bind (s us) (sb-ext:get-time-of-day)
-    (+ (* s 1000000) us)))
+  "Reference time in microseconds: CLOCK_MONOTONIC (1 on Linux, 6 on
+macOS), finer than a kernel tick and, unlike gettimeofday, not slewed by
+NTP (a macOS CI VM showed a 312 us wall-clock adjustment)."
+  (multiple-value-bind (s ns) (sb-unix:clock-gettime #+linux 1 #+darwin 6)
+    (+ (* s 1000000) (floor ns 1000))))
 
 (deftest default-clock-has-the-documented-resolution
-  #-(and sbcl unix) (skip "needs SBCL on Unix for the reference clock")
-  #+(and sbcl unix)
+  #-(and sbcl (or linux darwin)) (skip "needs SBCL on Linux or macOS for the reference clock")
+  #+(and sbcl (or linux darwin))
   (let ((smallest nil)
         (end (+ (%fine-us) 30000))
         (prev (cache-protocol:monotonic-seconds)))
@@ -33,8 +35,8 @@
                 smallest (and smallest (* 1d6 smallest))))))
 
 (deftest ttl-is-never-cut-short-default-clock
-  #-(and sbcl unix) (skip "needs SBCL on Unix for the reference clock")
-  #+(and sbcl unix)
+  #-(and sbcl (or linux darwin)) (skip "needs SBCL on Linux or macOS for the reference clock")
+  #+(and sbcl (or linux darwin))
   (let ((c (cache-protocol:make-in-memory-ttl-cache))
         (early 0)
         (worst 0))
